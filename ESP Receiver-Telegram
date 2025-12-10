@@ -1,0 +1,99 @@
+#include "HardwareSerial.h"
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+
+HardwareSerial Receiver(1);
+
+// WiFi
+const char* ssid = "PLDTHOMEFIBRj8cGb";
+const char* password = "PLDTWIFI55kU2";
+
+// Telegram
+String botToken = "8254568036:AAHmkvCNCyiLf3_FWgeTHqh70EmaBAryWi4";
+String chatID   = "-5028753359";
+
+const char* telegramHost = "api.telegram.org";
+const int httpsPort = 443;
+
+WiFiClientSecure client;
+
+// State tracking
+String lastStatus = "";
+bool sendingMessage = false;  // prevent multiple simultaneous sends
+
+void setup() {
+  Serial.begin(115200);
+  Receiver.begin(9600, SERIAL_8N1, 16, -1);
+
+  Serial.println("ESP32 Fire Receiver Ready...");
+
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) { Serial.print("."); delay(300); }
+  Serial.println("\nWiFi Connected!");
+  Serial.println(WiFi.localIP());
+
+  client.setInsecure();  // allow HTTPS
+}
+
+void loop() {
+  if (Receiver.available()) {
+    String incoming = Receiver.readStringUntil('\n');
+    incoming.trim();
+    incoming.toUpperCase();
+    Serial.print("Received: "); Serial.println(incoming);
+
+    // Only send Telegram if state changed and not already sending
+    if (incoming != lastStatus && !sendingMessage) {
+      lastStatus = incoming;
+      sendingMessage = true;
+
+      if (incoming.indexOf("FIRE") != -1) {
+        sendTelegramMessage("🔥🔥🔥 FIRE ALERT! Flame detected by the sensor!");
+      } else if (incoming.indexOf("SAFE") != -1) {
+        sendTelegramMessage("✅ SAFE: No fire detected. System is normal.");
+      }
+
+      sendingMessage = false;
+    }
+  }
+}
+
+void sendTelegramMessage(String message) {
+
+  // Make sure WiFi is connected
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected. Reconnecting...");
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) delay(300);
+    Serial.println("WiFi Reconnected!");
+  }
+
+  // Create a fresh client for each message
+  WiFiClientSecure tempClient;
+  tempClient.setInsecure();
+
+  if (!tempClient.connect(telegramHost, httpsPort)) {
+    Serial.println("❌ Telegram connection failed");
+    return;
+  }
+
+  // Encode message properly (spaces -> %20)
+  String encodedMessage = message;
+  encodedMessage.replace(" ", "%20");
+
+  String url = "/bot" + botToken + "/sendMessage?chat_id=" + chatID + "&text=" + encodedMessage;
+
+  tempClient.print(String("GET ") + url + " HTTP/1.1\r\n" +
+                   "Host: " + telegramHost + "\r\n" +
+                   "Connection: close\r\n\r\n");
+
+  // Wait for full HTTP response
+  while (tempClient.connected()) {
+    String line = tempClient.readStringUntil('\n');
+    if (line.length() == 1) break;
+  }
+
+  tempClient.stop();
+  Serial.println("📤 Telegram message SENT!");
+}
